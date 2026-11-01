@@ -61,6 +61,10 @@ export interface AppState {
   reviewed: number;
   xp: number;
   tutorial: boolean;
+  /** Epoch ms of the last completed loop (drives lit / at-risk / cold). */
+  lastActionAt: number | null;
+  /** Reward tones on/off. */
+  sound: boolean;
 }
 
 export const defaults = (): AppState => ({
@@ -83,4 +87,6 @@ export const defaults = (): AppState => ({
   reviewed: 0,
   xp: 0,
   tutorial: false,
+  lastActionAt: null,
+  sound: true,
 });

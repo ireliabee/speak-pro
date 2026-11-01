@@ -73,6 +73,24 @@ Design rules:
 - **Testable outcomes.** Nodes expose `data-node-id`, `data-state`, `data-beacon`, `data-fog`;
   the HUD exposes `data-state="lit|cold"`. Tests assert state, never animation timing.
 
+### Motion system
+
+`DESIGN.md` is the motion & visual spec; the implementation lives mostly outside React render:
+
+- `src/components/map/useCamera.ts` — one spring camera (stiffness 120, damping 20) driven by
+  rAF on refs: `flyTo` (zoom out 15% → arc → settle), `pushIn`/`pullBack` around modals,
+  idle drift after 8 s, drag inertia (friction 0.92). d3-zoom only feeds gestures into it.
+- `SkillMap` layers: parallax starfield (0.2×), lantern glow lerped to the beacon, edges with
+  `lit` / `at-risk` / `cold` states, bloom + halo rotation on mastered nodes.
+- The standard reward sequence (`reward` command): dim → radial wipe + flash → lightning arc
+  with spark → particles (+ haptic) → relight; XP rolls in the top bar; level-ups sweep light.
+- `RitualBar` — four fixed slots, keys **1 2 3 4** printed and bound, done-check draws itself.
+- `src/lib/audio.ts` — four fixed Web Audio tones (C5/E5/G5/C6) behind the 🔔 toggle; the
+  chord plays when all four steps are done in a day.
+- `prefers-reduced-motion` → no camera flights, particles or shimmer; crossfades only; tones stay.
+- Outcomes are exposed as `data-*` attributes (`data-path`, `data-state`, `data-beacon`,
+  `data-pushed`, `data-reduced-motion`) so tests never time animations.
+
 Fonts are self-hosted (`src/app/fonts`, Fontsource builds of Inter and Fraunces, OFL) via
 `next/font/local`, so builds don't depend on Google Fonts being reachable.
 

@@ -62,9 +62,12 @@ describe("TodayStrip", () => {
     useAppStore.setState({ chapters: { meet: 1, disc: 1, read1: 1, review1: 1 } });
     useAppStore.getState().completeLoop("read");
     render(<TodayStrip onOpenLoop={onOpenLoop} />);
-    expect(screen.getByTestId("today-read")).toHaveTextContent("✓");
+    expect(screen.getByTestId("today-read")).toHaveAttribute("data-state", "done");
     expect(screen.getByTestId("today-review")).toHaveTextContent("0 due");
-    expect(screen.queryByTestId("today-explain")).not.toBeInTheDocument();
+    expect(screen.getByTestId("today-review")).toHaveAttribute("data-state", "ready");
+    // locked slots stay in place (same order, same position) but are disabled
+    expect(screen.getByTestId("today-explain")).toHaveAttribute("data-state", "locked");
+    expect(screen.getByTestId("today-explain")).toBeDisabled();
     await userEvent.click(screen.getByTestId("today-review"));
     expect(onOpenLoop).toHaveBeenCalledWith("review");
   });

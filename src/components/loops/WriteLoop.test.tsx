@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import WriteLoop from "./WriteLoop";
 import { scoreText } from "@/lib/scoring";
@@ -25,7 +25,9 @@ describe("WriteLoop", () => {
     const score = screen.getByTestId("write-score");
     const expected = scoreText("Too short. Really. Yes. Ok.", "mir").score;
     expect(expected).toBeLessThan(40);
-    expect(score).toHaveTextContent(String(expected));
+    expect(score).toBeInTheDocument();
+    expect(screen.getByTestId("write-score-value")).toHaveAttribute("data-score", String(expected));
+    expect(score.querySelectorAll("[data-ok='false']").length).toBeGreaterThan(0);
     expect(submit).toBeDisabled();
     expect(useUiStore.getState().toasts[0]?.msg).toMatch(/Score 40\+/);
   });
@@ -35,7 +37,10 @@ describe("WriteLoop", () => {
     await userEvent.click(screen.getByLabelText("Your paragraph"));
     await userEvent.paste(GOOD);
     await userEvent.click(screen.getByRole("button", { name: "Score it" }));
-    expect(screen.getByTestId("write-score")).toHaveTextContent("100");
+    expect(screen.getByTestId("write-score-value")).toHaveAttribute("data-score", "100");
+    await waitFor(() => expect(screen.getByTestId("write-score-value")).toHaveTextContent("100"), {
+      timeout: 4000,
+    });
     const submit = screen.getByRole("button", { name: "Submit" });
     expect(submit).toBeEnabled();
     await userEvent.click(submit);

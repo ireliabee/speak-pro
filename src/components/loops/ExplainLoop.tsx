@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Modal, { ModalFoot, ModalTitle } from "@/components/ui/Modal";
 import { NODE_BY_ID } from "@/data/graph";
 import { EXPLAIN_CONCEPTS, LOOPS } from "@/data/loops";
+import { playLoopTone } from "@/lib/audio";
 import { useAppStore } from "@/store/useAppStore";
 import { useUiStore } from "@/store/useUiStore";
 import { useLoopCompletion } from "./useLoopCompletion";
@@ -11,6 +12,8 @@ import { useLoopCompletion } from "./useLoopCompletion";
 export const SESSION_SECONDS = 120;
 /** "Done" unlocks once at least this many seconds have been spoken. */
 export const MIN_SPOKEN_SECONDS = 30;
+/** The ring pulses amber for the last 15 s. */
+export const URGENT_SECONDS = 15;
 
 const CHECKS = [
   "I used no jargon I couldn’t define",
@@ -29,7 +32,7 @@ export default function ExplainLoop({ open, nodeId = null }: ExplainLoopProps) {
   const closeModal = useUiStore((s) => s.closeModal);
   const toast = useUiStore((s) => s.toast);
   const submitExplain = useAppStore((s) => s.submitExplain);
-  const finish = useLoopCompletion();
+  const finish = useLoopCompletion("explain");
 
   const initial = useMemo(
     () =>
@@ -62,6 +65,7 @@ export default function ExplainLoop({ open, nodeId = null }: ExplainLoopProps) {
         if (n <= 0) {
           stop();
           setEnded(true);
+          if (useAppStore.getState().sound) playLoopTone("explain");
           toast("Two minutes — stop there.");
           return 0;
         }
@@ -80,6 +84,7 @@ export default function ExplainLoop({ open, nodeId = null }: ExplainLoopProps) {
     finish(
       res,
       `Explained ${NODE_BY_ID[concept]?.fw} · ${n}/3 Feynman checks${n === 3 ? " · bonus rep" : ""}`,
+      concept,
     );
   };
 
@@ -122,6 +127,8 @@ export default function ExplainLoop({ open, nodeId = null }: ExplainLoopProps) {
             strokeDasharray="1"
             strokeDashoffset={1 - left / SESSION_SECONDS}
             transform="rotate(-90 60 60)"
+            className={`timer-ring${running && left <= URGENT_SECONDS ? " urgent" : ""}`}
+            data-state={running && left <= URGENT_SECONDS ? "urgent" : running ? "running" : "idle"}
             style={{ transition: "stroke-dashoffset 1s linear" }}
           />
         </svg>

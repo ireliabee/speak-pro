@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Modal, { ModalFoot, ModalTitle } from "@/components/ui/Modal";
 import { NODE_BY_ID } from "@/data/graph";
 import { LOOPS, WRITE_FRAMEWORKS } from "@/data/loops";
 import { EXCELLENT_THRESHOLD, SUBMIT_THRESHOLD, scoreText, type ScoreResult } from "@/lib/scoring";
+import { tweenNumber } from "@/lib/motion";
 import { useAppStore } from "@/store/useAppStore";
 import { useUiStore } from "@/store/useUiStore";
 import { useLoopCompletion } from "./useLoopCompletion";
@@ -18,13 +19,23 @@ export default function WriteLoop({ open, nodeId = null }: WriteLoopProps) {
   const closeModal = useUiStore((s) => s.closeModal);
   const toast = useUiStore((s) => s.toast);
   const submitWrite = useAppStore((s) => s.submitWrite);
-  const finish = useLoopCompletion();
+  const finish = useLoopCompletion("write");
 
   const [fw, setFw] = useState<string>(
     nodeId && WRITE_FRAMEWORKS.includes(nodeId) ? nodeId : "jatavia",
   );
   const [text, setText] = useState("");
   const [result, setResult] = useState<ScoreResult | null>(null);
+  const numRef = useRef<HTMLDivElement>(null);
+
+  // Score counts up from 0 (outside React: rAF tween on the DOM node).
+  useEffect(() => {
+    const el = numRef.current;
+    if (!result || !el) return;
+    return tweenNumber(0, result.score, 600, (v) => {
+      el.textContent = String(Math.round(v));
+    });
+  }, [result]);
 
   const score = () => {
     const r = scoreText(text, fw);
@@ -37,7 +48,7 @@ export default function WriteLoop({ open, nodeId = null }: WriteLoopProps) {
     if (!result || result.score < SUBMIT_THRESHOLD) return;
     const extra = result.score >= EXCELLENT_THRESHOLD ? " (excellent — +1 bonus rep)" : "";
     const res = submitWrite(fw, result.score, result.longw);
-    finish(res, `Paragraph scored ${result.score}${extra}`);
+    finish(res, `Paragraph scored ${result.score}${extra}`, fw);
   };
 
   const canSubmit = !!result && result.score >= SUBMIT_THRESHOLD;
@@ -78,6 +89,7 @@ export default function WriteLoop({ open, nodeId = null }: WriteLoopProps) {
       <textarea
         id="wr-text"
         className="field"
+        autoFocus
         placeholder="Write here…"
         value={text}
         onChange={(e) => {
@@ -90,12 +102,23 @@ export default function WriteLoop({ open, nodeId = null }: WriteLoopProps) {
           className="anim-pop mt-3 flex items-center gap-4 rounded-[14px] border border-line bg-bg2 p-3.5"
           data-testid="write-score"
         >
-          <div className="font-serif text-[40px] font-semibold leading-none" style={{ color }}>
+          <div
+            ref={numRef}
+            className="font-serif text-[40px] font-semibold leading-none"
+            style={{ color }}
+            data-testid="write-score-value"
+            data-score={result.score}
+          >
             {result.score}
           </div>
           <ul className="m-0 list-disc pl-4 text-xs text-ink2">
-            {result.checks.map((c) => (
-              <li key={c.txt} className={c.ok ? "text-green" : "text-red"}>
+            {result.checks.map((c, i) => (
+              <li
+                key={c.txt}
+                className={c.ok ? "check-ok text-green" : "check-no text-red"}
+                style={{ animationDelay: `${c.ok ? i * 50 : 0}ms` }}
+                data-ok={c.ok ? "true" : "false"}
+              >
                 {c.ok ? "✓" : "✗"} {c.txt}
               </li>
             ))}

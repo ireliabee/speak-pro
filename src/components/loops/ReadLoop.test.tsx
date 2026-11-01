@@ -39,6 +39,8 @@ describe("ReadLoop", () => {
     expect(s.progress.ovi).toBe(1);
     expect(useUiStore.getState().modal.kind).toBe("none");
     expect(useUiStore.getState().toasts.at(-1)?.msg).toBe("5 words logged → 5 cards created");
-    expect(useUiStore.getState().commands.some((c) => c.type === "burst")).toBe(true);
+    const types = useUiStore.getState().commands.map((c) => c.type);
+    expect(types).toContain("pullBack");
+    expect(types).toContain("reward");
   });
 });

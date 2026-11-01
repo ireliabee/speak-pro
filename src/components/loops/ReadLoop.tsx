@@ -20,7 +20,7 @@ export default function ReadLoop({ open, nodeId = null }: ReadLoopProps) {
   const toast = useUiStore((s) => s.toast);
   const addWords = useAppStore((s) => s.addWords);
   const completeLoop = useAppStore((s) => s.completeLoop);
-  const finish = useLoopCompletion();
+  const finish = useLoopCompletion("read");
 
   const [src, setSrc] = useState("");
   const [words, setWords] = useState<string[]>(ROWS.map(() => ""));
@@ -40,7 +40,7 @@ export default function ReadLoop({ open, nodeId = null }: ReadLoopProps) {
     }
     const n = addWords(entries, src.trim());
     const result = completeLoop("read", nodeId);
-    finish(result, `${n} words logged → ${n} cards created`);
+    finish(result, `${n} words logged → ${n} cards created`, nodeId ?? "ovi");
   };
 
   return (
@@ -54,6 +54,7 @@ export default function ReadLoop({ open, nodeId = null }: ReadLoopProps) {
       <input
         id="rd-src"
         className="field"
+        autoFocus
         placeholder="e.g. a Lancet editorial, a Supreme Court opinion…"
         value={src}
         onChange={(e) => setSrc(e.target.value)}

@@ -82,7 +82,7 @@ export default function QuestPanel({ onAction }: QuestPanelProps) {
       ) : (
         <button
           type="button"
-          className="btn primary big"
+          className="btn primary big cta"
           data-testid="quest-action"
           onClick={() => onAction(ch.action)}
         >

@@ -28,7 +28,7 @@ test.describe("SpeakPro journey", () => {
 
     // Chapter 2 — pick a discipline from a "+" node
     await page.getByTestId("quest-action").click();
-    await page.locator('[data-node-id="averi"]').click({ force: true });
+    await page.locator('[data-node-id="averi"] circle.body').click({ force: true });
     await page.getByTestId("set-discipline").click();
     await expect(page.getByTestId("hud-disc")).toHaveText("Business");
     await expect(page.getByTestId("celebration-title")).toHaveText("Choose your discipline");
@@ -85,5 +85,51 @@ test.describe("SpeakPro journey", () => {
     await page.getByRole("button", { name: "Log words" }).click();
     await expect(page.getByRole("status")).toContainText("at least 3 words");
     await expect(page.getByTestId("read-loop")).toBeVisible();
+  });
+});
+
+test.describe("motion system", () => {
+  const seeded = {
+    state: {
+      onboarded: true,
+      tutorial: true,
+      chapters: { meet: 1, disc: 1, read1: 1, review1: 1, prep: 1, pyramid: 1, aloud: 1 },
+      disc: "berlin",
+      streak: { current: 2, best: 2, last: new Date().toISOString().slice(0, 10) },
+      lastActionAt: Date.now() - 60_000,
+      xp: 400,
+    },
+    version: 1,
+  };
+
+  test("ritual bar shortcuts, push-in and lit path expose data-state", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate((s) => localStorage.setItem("speakpro.v1", JSON.stringify(s)), seeded);
+    await page.reload();
+    await expect(page.getByTestId("skill-map")).toHaveAttribute("data-path", "lit");
+    await expect(page.getByTestId("hud-path")).toHaveAttribute("data-state", "lit");
+    const bar = page.getByTestId("ritual-bar");
+    await expect(bar.locator("[data-slot]")).toHaveCount(4);
+    for (const k of ["read", "write", "explain", "review"]) {
+      await expect(page.getByTestId(`today-${k}`)).toHaveAttribute("data-state", "ready");
+    }
+    await page.keyboard.press("2");
+    await expect(page.getByTestId("write-loop")).toBeVisible();
+    await expect(page.locator(".stage")).toHaveAttribute("data-pushed", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("write-loop")).toBeHidden();
+    await expect(page.locator(".stage")).not.toHaveAttribute("data-pushed", "true");
+    await page.keyboard.press("4");
+    await expect(page.getByTestId("review-loop")).toBeVisible();
+  });
+
+  test("honours prefers-reduced-motion", async ({ browser }) => {
+    const ctx = await browser.newContext({ reducedMotion: "reduce" });
+    const page = await ctx.newPage();
+    await page.goto("/");
+    await page.evaluate((s) => localStorage.setItem("speakpro.v1", JSON.stringify(s)), seeded);
+    await page.reload();
+    await expect(page.getByTestId("skill-map")).toHaveAttribute("data-reduced-motion", "true");
+    await ctx.close();
   });
 });

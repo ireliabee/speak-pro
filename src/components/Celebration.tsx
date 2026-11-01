@@ -1,6 +1,7 @@
 "use client";
 
 import Modal from "@/components/ui/Modal";
+import { motion } from "framer-motion";
 import type { Chapter } from "@/data/journey";
 import { levelOf } from "@/lib/journey";
 import { useAppStore } from "@/store/useAppStore";
@@ -23,7 +24,12 @@ export default function Celebration({ open, chapter, next, onContinue }: Celebra
       testId="celebration"
     >
       {chapter && (
-        <div className="py-2.5 text-center">
+        <motion.div
+          className="py-2.5 text-center"
+          initial={{ scale: 0.92, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 300, damping: 22, duration: 0.4 }}
+        >
           <div className="cele-badge mx-auto mb-3 flex h-[72px] w-[72px] items-center justify-center rounded-full bg-orange text-[36px] font-extrabold text-[#1a1200] shadow-[0_0_40px_rgba(245,166,35,.5)]">
             ✓
           </div>
@@ -53,7 +59,7 @@ export default function Celebration({ open, chapter, next, onContinue }: Celebra
               Continue →
             </button>
           </div>
-        </div>
+        </motion.div>
       )}
     </Modal>
   );

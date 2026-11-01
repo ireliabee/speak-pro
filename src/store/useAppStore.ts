@@ -32,6 +32,7 @@ export interface AppActions {
   onboard: (name: string) => void;
   setMode: (mode: LabelMode) => void;
   setTutorialDone: () => void;
+  setSound: (on: boolean) => void;
   toggleExpanded: (id: string) => void;
   discoverNode: (id: string) => boolean;
   markRootMet: () => void;
@@ -91,6 +92,7 @@ export function applyLoop(
     logs: [...s.logs, { loop, at: now, nodeId }],
     counts: { ...s.counts, [loop]: (s.counts[loop] ?? 0) + 1 },
     xp: s.xp + LOOP_XP,
+    lastActionAt: now,
   };
   const { state, chapter } = completeChapter(next);
   const d = state.done[today] ?? {};
@@ -106,6 +108,7 @@ export const useAppStore = create<AppStore>()(
       onboard: (name) => set({ name: name.trim(), onboarded: true }),
       setMode: (mode) => set({ mode }),
       setTutorialDone: () => set({ tutorial: true }),
+      setSound: (sound) => set({ sound }),
       toggleExpanded: (id) => set((s) => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } })),
 
       discoverNode: (id) => {
@@ -229,6 +232,8 @@ export const useAppStore = create<AppStore>()(
           reviewed: s.reviewed,
           xp: s.xp,
           tutorial: s.tutorial,
+          lastActionAt: s.lastActionAt,
+          sound: s.sound,
         };
         return data as unknown as AppStore;
       },

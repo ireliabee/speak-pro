@@ -11,7 +11,7 @@ import ExplainLoop from "@/components/loops/ExplainLoop";
 import ReviewLoop from "@/components/loops/ReviewLoop";
 import Celebration from "@/components/Celebration";
 import Onboarding from "@/components/Onboarding";
-import TodayStrip from "@/components/TodayStrip";
+import RitualBar from "@/components/RitualBar";
 import TopBar from "@/components/TopBar";
 import Tutorial from "@/components/Tutorial";
 import Snapshot from "@/components/Snapshot";
@@ -21,6 +21,7 @@ import { COLORS, NODE_BY_ID, type DisciplineId, type GraphNode, type LoopId } fr
 import { DISCIPLINES } from "@/data/disciplines";
 import { JOURNEY, type ChapterAction } from "@/data/journey";
 import { chapterIndex } from "@/lib/journey";
+import { REWARD } from "@/components/map/SkillMap";
 import { dayDiff, pathWarm, todayISO } from "@/lib/dates";
 import { useAppStore, useHydrated } from "@/store/useAppStore";
 import { useUiStore } from "@/store/useUiStore";
@@ -49,6 +50,7 @@ export default function App() {
   const openCelebration = useUiStore((s) => s.openCelebration);
   const send = useUiStore((s) => s.send);
   const toast = useUiStore((s) => s.toast);
+  const setPulseSlot = useUiStore((s) => s.setPulseSlot);
 
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [asideOpen, setAsideOpen] = useState(false);
@@ -59,9 +61,8 @@ export default function App() {
     const ch = checkChapters();
     if (!ch) return false;
     const idx = JOURNEY.findIndex((c) => c.id === ch.id);
-    send({ type: "burst", ids: [ch.node], color: COLORS.orange });
-    send({ type: "drawEdges", ids: [ch.node] });
-    setTimeout(() => openCelebration(ch, JOURNEY[idx + 1] ?? null), 600);
+    send({ type: "reward", id: ch.node, color: COLORS.orange });
+    setTimeout(() => openCelebration(ch, JOURNEY[idx + 1] ?? null), REWARD.total);
     return true;
   }, [checkChapters, send, openCelebration]);
 
@@ -76,10 +77,19 @@ export default function App() {
         send({ type: "coolDown" });
         toast(`The path cooled — ${gap} days since your last step. One step relights it.`);
       }, 1600);
+      setTimeout(() => setPulseSlot("read"), 1600 + 2500);
+      setTimeout(() => setPulseSlot(null), 1600 + 2500 + 4500);
     } else if (streak.last && dayDiff(streak.last, todayISO()) === 1) {
       setTimeout(() => toast(`Streak at ${streak.current}. Do one step today to keep it.`), 1600);
     }
-  }, [hydrated, onboarded, coolStreakIfStale, send, toast]);
+  }, [hydrated, onboarded, coolStreakIfStale, send, toast, setPulseSlot]);
+
+  // Push the camera in (and blur the map) whenever a loop modal opens.
+  const pushed = modal.kind === "loop";
+  const pushTarget = modal.kind === "loop" ? modal.nodeId : null;
+  useEffect(() => {
+    if (pushed) send({ type: "pushIn", id: pushTarget });
+  }, [pushed, pushTarget, send]);
 
   const onNodeClick = useCallback(
     (n: GraphNode) => {
@@ -164,7 +174,10 @@ export default function App() {
         onReset={() => openModal({ kind: "reset" })}
       />
       <div className="relative grid min-h-0 grid-cols-[1fr_360px] max-[900px]:grid-cols-1">
-        <div className="stage relative overflow-hidden">
+        <div
+          className={`stage relative overflow-hidden${pushed ? " pushed" : ""}`}
+          data-pushed={pushed ? "true" : undefined}
+        >
           <div className="absolute left-4 top-3.5 z-[4] flex items-center gap-2">
             <Hud />
             <button type="button" className="btn sm ghost" onClick={() => send({ type: "fit" })}>
@@ -172,7 +185,8 @@ export default function App() {
             </button>
           </div>
           <SkillMap onNodeClick={onNodeClick} onBackgroundClick={backToQuest} />
-          <TodayStrip onOpenLoop={openLoopFromStrip} />
+          <div className="vignette" aria-hidden />
+          <RitualBar onOpenLoop={openLoopFromStrip} />
           <div className="absolute bottom-4 right-4 z-[4] flex flex-col gap-1.5">
             <button
               type="button"

@@ -22,11 +22,17 @@ export type MapCommand =
   | { type: "zoomTo"; id: string; width?: number }
   | { type: "fit" }
   | { type: "zoomBy"; factor: number }
-  | { type: "coolDown" };
+  | { type: "coolDown" }
+  | { type: "pushIn"; id: string | null }
+  | { type: "pullBack" }
+  /** The standard reward sequence (DESIGN.md §3) on a node. */
+  | { type: "reward"; id: string; color?: string };
 
 interface UiState {
   modal: ModalKind;
   focusedId: string | null;
+  /** Ritual-bar slot to pulse (e.g. after a cold map relights). */
+  pulseSlot: LoopId | null;
   toasts: Toast[];
   commands: Array<MapCommand & { seq: number }>;
   openLoop: (loop: LoopId, nodeId?: string | null) => void;
@@ -38,6 +44,7 @@ interface UiState {
   dismissToast: (id: number) => void;
   send: (cmd: MapCommand) => void;
   consume: (seq: number) => void;
+  setPulseSlot: (slot: LoopId | null) => void;
 }
 
 let toastSeq = 0;
@@ -46,6 +53,7 @@ let cmdSeq = 0;
 export const useUiStore = create<UiState>()((set) => ({
   modal: { kind: "none" },
   focusedId: null,
+  pulseSlot: null,
   toasts: [],
   commands: [],
   openLoop: (loop, nodeId = null) => set({ modal: { kind: "loop", loop, nodeId } }),
@@ -60,4 +68,5 @@ export const useUiStore = create<UiState>()((set) => ({
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   send: (cmd) => set((s) => ({ commands: [...s.commands, { ...cmd, seq: ++cmdSeq }] })),
   consume: (seq) => set((s) => ({ commands: s.commands.filter((c) => c.seq !== seq) })),
+  setPulseSlot: (pulseSlot) => set({ pulseSlot }),
 }));

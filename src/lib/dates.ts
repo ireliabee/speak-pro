@@ -10,3 +10,20 @@ export function pathWarm(last: string | null, today: string = todayISO()): boole
   if (!last) return false;
   return dayDiff(last, today) <= 1;
 }
+
+export type PathState = "lit" | "at-risk" | "cold";
+export const AT_RISK_AFTER_MS = 20 * 3600 * 1000;
+
+/**
+ * lit: streak alive and last action < 20 h ago · at-risk: streak alive but > 20 h ·
+ * cold: no step today or yesterday.
+ */
+export function pathState(
+  last: string | null,
+  lastActionAt: number | null,
+  now: number = Date.now(),
+): PathState {
+  if (!pathWarm(last, todayISO(new Date(now)))) return "cold";
+  if (lastActionAt !== null && now - lastActionAt > AT_RISK_AFTER_MS) return "at-risk";
+  return "lit";
+}

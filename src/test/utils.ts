@@ -5,5 +5,11 @@ import { useUiStore } from "@/store/useUiStore";
 export function resetStores(): void {
   localStorage.clear();
   useAppStore.getState().reset();
-  useUiStore.setState({ modal: { kind: "none" }, focusedId: null, toasts: [], commands: [] });
+  useUiStore.setState({
+    modal: { kind: "none" },
+    focusedId: null,
+    pulseSlot: null,
+    toasts: [],
+    commands: [],
+  });
 }

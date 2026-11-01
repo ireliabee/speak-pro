@@ -15,10 +15,12 @@ import {
 } from "@/data/graph";
 import { JOURNEY } from "@/data/journey";
 import { chapterIndex, reps, revealed, stateOf } from "@/lib/journey";
-import { pathWarm } from "@/lib/dates";
+import { pathState } from "@/lib/dates";
+import { haptic, prefersReducedMotion, seeded } from "@/lib/motion";
 import { useAppStore } from "@/store/useAppStore";
 import { useUiStore, type MapCommand } from "@/store/useUiStore";
-import { childPositions, easeInOutCubic, edgePath, labelPlacement, rootLoopPath } from "./geometry";
+import { childPositions, edgePath, labelPlacement, rootLoopPath } from "./geometry";
+import { useCamera, ZOOM_MAX, ZOOM_MIN, type Camera } from "./useCamera";
 
 export interface SkillMapProps {
   onNodeClick: (node: GraphNode) => void;
@@ -26,16 +28,20 @@ export interface SkillMapProps {
 }
 
 const ROOT = NODE_BY_ID.azair!;
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 5.3;
+const NS = "http://www.w3.org/2000/svg";
+const STAR_PARALLAX = 0.2;
+const LANTERN_R = 260;
+const LANTERN_LERP = 0.06;
 
-interface Camera {
-  x: number;
-  y: number;
-  k: number;
-}
-
-const HOME: Camera = { x: VIEWBOX.x + VIEWBOX.w / 2, y: VIEWBOX.y + VIEWBOX.h / 2, k: 1 };
+/** Reward sequence timings (ms) — identical every time (DESIGN.md §3). */
+export const REWARD = {
+  dim: 200,
+  wipe: 350,
+  flash: 120,
+  arc: 450,
+  particles: 900,
+  total: 1300,
+} as const;
 
 function cameraToTransform(c: Camera): ZoomTransform {
   const cx = VIEWBOX.x + VIEWBOX.w / 2;
@@ -49,18 +55,36 @@ function transformToCamera(t: ZoomTransform): Camera {
   return { x: (cx - t.x) / t.k, y: (cy - t.y) / t.k, k: t.k };
 }
 
+/** Deterministic starfield so SSR and client agree. */
+const STARS = (() => {
+  const rnd = seeded(7);
+  return Array.from({ length: 160 }, () => ({
+    x: VIEWBOX.x - 400 + rnd() * (VIEWBOX.w + 800),
+    y: VIEWBOX.y - 300 + rnd() * (VIEWBOX.h + 600),
+    r: 0.6 + rnd() * 1.4,
+    o: 0.15 + rnd() * 0.5,
+  }));
+})();
+
 export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const zoomRef = useRef<SVGGElement>(null);
+  const starsRef = useRef<SVGGElement>(null);
+  const lanternRef = useRef<SVGCircleElement>(null);
   const fxRef = useRef<SVGGElement>(null);
   const edgesRef = useRef<SVGGElement>(null);
   const nodesRef = useRef<SVGGElement>(null);
   const zoomBehaviour = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
-  const camRef = useRef<Camera>(HOME);
-  const animRef = useRef<number | null>(null);
+  const gesture = useRef<{ cam: Camera; t: number; v: { x: number; y: number } } | null>(null);
+  const lantern = useRef<{ x: number; y: number; raf: number | null }>({
+    x: ROOT.x,
+    y: ROOT.y,
+    raf: null,
+  });
 
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [entering, setEntering] = useState(true);
+  const reduced = useMemo(() => prefersReducedMotion(), []);
 
   const progress = useAppStore((s) => s.progress);
   const discovered = useAppStore((s) => s.discovered);
@@ -69,11 +93,14 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
   const expanded = useAppStore((s) => s.expanded);
   const mode = useAppStore((s) => s.mode);
   const streakLast = useAppStore((s) => s.streak.last);
+  const lastActionAt = useAppStore((s) => s.lastActionAt);
   const focusedId = useUiStore((s) => s.focusedId);
   const commands = useUiStore((s) => s.commands);
   const consume = useUiStore((s) => s.consume);
 
-  const warm = pathWarm(streakLast);
+  const path = pathState(streakLast, lastActionAt);
+  const lit = path === "lit";
+  const warm = path !== "cold";
   const visible = useMemo(() => revealed({ chapters, disc }), [chapters, disc]);
   const targetId = JOURNEY[chapterIndex({ chapters })]!.node;
   const metRoot = !!chapters.meet;
@@ -91,150 +118,264 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
 
   /* ---------- camera ---------- */
   const applyCamera = useCallback((c: Camera) => {
-    camRef.current = c;
+    const t = cameraToTransform(c);
+    zoomRef.current?.setAttribute("transform", t.toString());
+    // Parallax: the starfield moves at 0.2× the graph.
+    starsRef.current?.setAttribute(
+      "transform",
+      `translate(${t.x * STAR_PARALLAX},${t.y * STAR_PARALLAX}) scale(${1 + (t.k - 1) * STAR_PARALLAX})`,
+    );
     const svg = svgRef.current;
     const z = zoomBehaviour.current;
-    if (!svg || !z) return;
-    z.transform(select(svg), cameraToTransform(c));
+    if (svg && z) z.transform(select(svg), t); // keep d3's internal state in sync (no sourceEvent)
   }, []);
 
-  const animateCamera = useCallback(
-    (to: Camera, dur = 700) => {
-      if (animRef.current !== null) cancelAnimationFrame(animRef.current);
-      const from = { ...camRef.current };
-      const t0 = performance.now();
-      const step = (now: number) => {
-        const t = Math.min(1, (now - t0) / dur);
-        const k = easeInOutCubic(t);
-        applyCamera({
-          x: from.x + (to.x - from.x) * k,
-          y: from.y + (to.y - from.y) * k,
-          k: from.k + (to.k - from.k) * k,
-        });
-        if (t < 1) animRef.current = requestAnimationFrame(step);
-        else animRef.current = null;
-      };
-      animRef.current = requestAnimationFrame(step);
-    },
-    [applyCamera],
-  );
-
-  const zoomTo = useCallback(
-    (id: string, width = 700) => {
-      const n = NODE_BY_ID[id];
-      if (!n) return;
-      animateCamera({ x: n.x, y: n.y, k: VIEWBOX.w / width });
-    },
-    [animateCamera],
-  );
-
-  const zoomBy = useCallback(
-    (f: number) => {
-      const c = camRef.current;
-      const k = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, c.k / f));
-      animateCamera({ ...c, k }, 300);
-    },
-    [animateCamera],
-  );
+  const camera = useCamera({ apply: applyCamera, idle: !reduced });
 
   useEffect(() => {
     const svg = svgRef.current;
-    const g = zoomRef.current;
-    if (!svg || !g) return;
+    if (!svg) return;
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent([ZOOM_MIN, ZOOM_MAX])
       .filter((ev: Event) => {
-        // Let clicks on nodes through; pan/zoom from anywhere else.
         if (ev.type === "mousedown" || ev.type === "touchstart") {
           const target = ev.target as Element | null;
           if (target?.closest?.(".node")) return false;
-          // d3-drag needs a window to suppress text selection; synthetic events may lack one.
           if (!(ev as MouseEvent).view) return false;
         }
         return !(ev as MouseEvent).ctrlKey || ev.type === "wheel";
       })
+      .on("start", (ev) => {
+        if (!ev.sourceEvent) return;
+        gesture.current = { cam: camera.get(), t: performance.now(), v: { x: 0, y: 0 } };
+      })
       .on("zoom", (ev) => {
-        const t = ev.transform as ZoomTransform;
-        g.setAttribute("transform", t.toString());
-        camRef.current = transformToCamera(t);
+        if (!ev.sourceEvent) return; // programmatic: already applied
+        const c = transformToCamera(ev.transform as ZoomTransform);
+        const g = gesture.current;
+        const now = performance.now();
+        if (g) {
+          const dt = Math.max(1, now - g.t) / 1000;
+          g.v = { x: (c.x - g.cam.x) / dt, y: (c.y - g.cam.y) / dt };
+          g.cam = c;
+          g.t = now;
+        }
+        camera.nudge(c);
+      })
+      .on("end", (ev) => {
+        if (!ev.sourceEvent) return;
+        const g = gesture.current;
+        gesture.current = null;
+        if (g && ev.sourceEvent.type !== "wheel") camera.release(g.v);
       });
     zoomBehaviour.current = z;
     select(svg).call(z).on("dblclick.zoom", null);
-    z.transform(select(svg), cameraToTransform(HOME));
+    camera.nudge(camera.get());
     const timer = setTimeout(() => setEntering(false), 2500);
     return () => {
       clearTimeout(timer);
       select(svg).on(".zoom", null);
       zoomBehaviour.current = null;
-      if (animRef.current !== null) cancelAnimationFrame(animRef.current);
     };
-  }, []);
+  }, [camera]);
 
-  /* ---------- effects: bursts, edge draws ---------- */
-  const burst = useCallback((id: string, color?: string) => {
-    const n = NODE_BY_ID[id];
-    const fx = fxRef.current;
-    const nodes = nodesRef.current;
-    if (!n || !fx) return;
-    const NS = "http://www.w3.org/2000/svg";
-    const fill = color ?? n.color ?? COLORS.orange;
-    for (let i = 0; i < 18; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const d = 30 + Math.random() * 50;
-      const c = document.createElementNS(NS, "circle");
-      c.setAttribute("cx", String(n.x));
-      c.setAttribute("cy", String(n.y));
-      c.setAttribute("r", String(2 + Math.random() * 2.5));
-      c.setAttribute("fill", fill);
-      fx.appendChild(c);
-      const anim = c.animate(
-        [
-          { transform: "translate(0,0)", opacity: 1 },
-          { transform: `translate(${Math.cos(a) * d}px,${Math.sin(a) * d}px)`, opacity: 0 },
-        ],
-        { duration: 700 + Math.random() * 400, easing: "cubic-bezier(.1,.8,.3,1)" },
-      );
-      anim.onfinish = () => c.remove();
+  /* ---------- lantern glow follows the beacon ---------- */
+  useEffect(() => {
+    const n = NODE_BY_ID[targetId];
+    const el = lanternRef.current;
+    if (!n || !el) return;
+    const L = lantern.current;
+    if (reduced || typeof requestAnimationFrame !== "function") {
+      L.x = n.x;
+      L.y = n.y;
+      el.setAttribute("cx", String(n.x));
+      el.setAttribute("cy", String(n.y));
+      return;
     }
-    const ring = document.createElementNS(NS, "circle");
-    ring.setAttribute("cx", String(n.x));
-    ring.setAttribute("cy", String(n.y));
-    ring.setAttribute("r", String(n.r));
-    ring.setAttribute("fill", "none");
-    ring.setAttribute("stroke", fill);
-    ring.setAttribute("stroke-width", "3");
-    fx.appendChild(ring);
-    const ra = ring.animate(
-      [
-        { r: n.r, opacity: 0.9 },
-        { r: n.r * 3.2, opacity: 0 },
-      ] as Keyframe[],
-      { duration: 800, easing: "ease-out" },
-    );
-    ra.onfinish = () => ring.remove();
-    const el = nodes?.querySelector<SVGGElement>(`[data-node-id="${id}"] > .g`);
-    el?.animate(
-      [{ transform: "scale(1)" }, { transform: "scale(1.35)" }, { transform: "scale(1)" }],
-      { duration: 520, easing: "cubic-bezier(.2,.9,.2,1.2)" },
-    );
-  }, []);
+    if (L.raf !== null) cancelAnimationFrame(L.raf);
+    const step = () => {
+      L.x += (n.x - L.x) * LANTERN_LERP;
+      L.y += (n.y - L.y) * LANTERN_LERP;
+      el.setAttribute("cx", L.x.toFixed(1));
+      el.setAttribute("cy", L.y.toFixed(1));
+      if (Math.hypot(n.x - L.x, n.y - L.y) > 0.5) L.raf = requestAnimationFrame(step);
+      else L.raf = null;
+    };
+    L.raf = requestAnimationFrame(step);
+    return () => {
+      if (L.raf !== null) cancelAnimationFrame(L.raf);
+    };
+  }, [targetId, reduced]);
 
-  const drawEdgesTo = useCallback((ids: string[]) => {
-    const edges = edgesRef.current;
-    if (!edges) return;
-    for (const id of ids) {
-      edges.querySelectorAll<SVGPathElement>(`path.hl[data-edge-to="${id}"]`).forEach((p) => {
+  /* ---------- effects: all outside React ---------- */
+  const nodeGroup = useCallback(
+    (id: string) =>
+      nodesRef.current?.querySelector<SVGGElement>(`[data-node-id="${id}"] > .g`) ?? null,
+    [],
+  );
+
+  const particles = useCallback(
+    (id: string, color?: string, count = 20) => {
+      const n = NODE_BY_ID[id];
+      const fx = fxRef.current;
+      if (!n || !fx || reduced) return;
+      const fill = color ?? n.color ?? COLORS.orange;
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = 30 + Math.random() * 50;
+        const c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", String(n.x));
+        c.setAttribute("cy", String(n.y));
+        c.setAttribute("r", String(2 + Math.random() * 2.5));
+        c.setAttribute("fill", fill);
+        fx.appendChild(c);
+        const anim = c.animate(
+          [
+            { transform: "translate(0,0)", opacity: 1 },
+            { transform: `translate(${Math.cos(a) * d}px,${Math.sin(a) * d}px)`, opacity: 0 },
+          ],
+          { duration: 700 + Math.random() * 400, easing: "cubic-bezier(.1,.8,.3,1)" },
+        );
+        anim.onfinish = () => c.remove();
+      }
+      const ring = document.createElementNS(NS, "circle");
+      ring.setAttribute("cx", String(n.x));
+      ring.setAttribute("cy", String(n.y));
+      ring.setAttribute("r", String(n.r));
+      ring.setAttribute("fill", "none");
+      ring.setAttribute("stroke", fill);
+      ring.setAttribute("stroke-width", "3");
+      fx.appendChild(ring);
+      const ra = ring.animate(
+        [
+          { r: n.r, opacity: 0.9 },
+          { r: n.r * 3.2, opacity: 0 },
+        ] as Keyframe[],
+        { duration: 800, easing: "ease-out" },
+      );
+      ra.onfinish = () => ring.remove();
+      nodeGroup(id)?.animate(
+        [{ transform: "scale(1)" }, { transform: "scale(1.35)" }, { transform: "scale(1)" }],
+        { duration: 520, easing: "cubic-bezier(.2,.9,.2,1.2)" },
+      );
+    },
+    [reduced, nodeGroup],
+  );
+
+  /** Radial fill wipe + white flash on a node (reward step 2). */
+  const wipe = useCallback(
+    (id: string) => {
+      const n = NODE_BY_ID[id];
+      const fx = fxRef.current;
+      if (!n || !fx || reduced) return;
+      const r = n.r + Math.min(reps({ progress }, id), 10) * 0.6;
+      const w = document.createElementNS(NS, "circle");
+      w.setAttribute("cx", String(n.x));
+      w.setAttribute("cy", String(n.y));
+      w.setAttribute("r", "0");
+      w.setAttribute("fill", "#fff");
+      fx.appendChild(w);
+      const a = w.animate(
+        [
+          { r: 0, opacity: 0.85 },
+          { r: r * 1.15, opacity: 0.35, offset: 0.7 },
+          { r: r * 1.15, opacity: 0 },
+        ] as Keyframe[],
+        { duration: REWARD.wipe, easing: "cubic-bezier(.2,.9,.2,1.2)" },
+      );
+      a.onfinish = () => w.remove();
+      const flash = document.createElementNS(NS, "circle");
+      flash.setAttribute("cx", String(n.x));
+      flash.setAttribute("cy", String(n.y));
+      flash.setAttribute("r", String(r + 6));
+      flash.setAttribute("fill", "#fff");
+      fx.appendChild(flash);
+      const f = flash.animate([{ opacity: 0.7 }, { opacity: 0 }], { duration: REWARD.flash });
+      f.onfinish = () => flash.remove();
+    },
+    [progress, reduced],
+  );
+
+  /** Lightning arc: the orange path edge draws itself with a bright core, halo and a spark. */
+  const lightning = useCallback(
+    (id: string) => {
+      const edges = edgesRef.current;
+      const fx = fxRef.current;
+      if (!edges || !fx) return;
+      const paths = edges.querySelectorAll<SVGPathElement>(`path.hl[data-edge-to="${id}"]`);
+      paths.forEach((p) => {
         p.classList.remove("draw");
         void p.getBoundingClientRect();
         p.classList.add("draw");
-        setTimeout(() => p.classList.remove("draw"), 1000);
+        setTimeout(() => p.classList.remove("draw"), REWARD.arc + 100);
+        if (reduced) return;
+        const d = p.getAttribute("d") ?? "";
+        const halo = document.createElementNS(NS, "path");
+        halo.setAttribute("d", d);
+        halo.setAttribute("class", "lightning-halo");
+        halo.setAttribute("pathLength", "1");
+        const core = document.createElementNS(NS, "path");
+        core.setAttribute("d", d);
+        core.setAttribute("class", "lightning-core");
+        core.setAttribute("pathLength", "1");
+        fx.append(halo, core);
+        for (const el of [halo, core]) {
+          const a = el.animate(
+            [
+              { strokeDashoffset: 1, opacity: 1 },
+              { strokeDashoffset: 0, opacity: 1, offset: 0.8 },
+              { strokeDashoffset: 0, opacity: 0 },
+            ],
+            { duration: REWARD.arc + 250, easing: "ease-out" },
+          );
+          a.onfinish = () => el.remove();
+        }
+        const spark = document.createElementNS(NS, "circle");
+        spark.setAttribute("r", "3.5");
+        spark.setAttribute("class", "spark");
+        const am = document.createElementNS(NS, "animateMotion");
+        am.setAttribute("dur", `${REWARD.arc}ms`);
+        am.setAttribute("fill", "freeze");
+        am.setAttribute("path", d);
+        spark.appendChild(am);
+        fx.appendChild(spark);
+        const b = (am as SVGAnimateMotionElement & { beginElement?: () => void }).beginElement;
+        if (typeof b === "function") b.call(am);
+        setTimeout(() => spark.remove(), REWARD.arc + 80);
       });
-    }
-  }, []);
+    },
+    [reduced],
+  );
+
+  /** The standard reward sequence: dim → wipe → lightning → particles → relight. */
+  const reward = useCallback(
+    (id: string, color?: string) => {
+      const layer = zoomRef.current;
+      if (reduced) {
+        lightning(id);
+        return;
+      }
+      layer?.classList.add("dimmed");
+      setTimeout(() => wipe(id), REWARD.dim);
+      setTimeout(() => lightning(id), REWARD.dim + 120);
+      setTimeout(
+        () => {
+          particles(id, color, 22);
+          haptic(12);
+        },
+        REWARD.dim + REWARD.wipe + 160,
+      );
+      setTimeout(() => layer?.classList.remove("dimmed"), REWARD.total - 250);
+    },
+    [reduced, wipe, lightning, particles],
+  );
 
   const coolDown = useCallback(() => {
     edgesRef.current?.querySelectorAll<SVGPathElement>("path.hl").forEach((p) => {
-      p.animate([{ opacity: 0.95 }, { opacity: 0.6 }], { duration: 2400, easing: "ease-out" });
+      p.animate([{ opacity: 0.95, filter: "none" }, { opacity: 0.55 }], {
+        duration: 2500,
+        easing: "ease-out",
+      });
     });
   }, []);
 
@@ -244,29 +385,40 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
       const run = (c: MapCommand) => {
         switch (c.type) {
           case "burst":
-            c.ids.forEach((id, i) => setTimeout(() => burst(id, c.color), i * (c.stagger ?? 110)));
+            c.ids.forEach((id, i) =>
+              setTimeout(() => particles(id, c.color), i * (c.stagger ?? 110)),
+            );
             break;
           case "drawEdges":
-            drawEdgesTo(c.ids);
+            c.ids.forEach((id, i) => setTimeout(() => lightning(id), i * 90));
             break;
           case "zoomTo":
-            zoomTo(c.id, c.width);
+            void camera.flyTo(c.id, { width: c.width });
             break;
           case "fit":
-            animateCamera(HOME);
+            void camera.fit();
             break;
           case "zoomBy":
-            zoomBy(c.factor);
+            void camera.zoomBy(c.factor);
             break;
           case "coolDown":
             coolDown();
+            break;
+          case "pushIn":
+            void camera.pushIn(c.id);
+            break;
+          case "pullBack":
+            void camera.pullBack();
+            break;
+          case "reward":
+            reward(c.id, c.color);
             break;
         }
       };
       run(cmd);
       consume(cmd.seq);
     }
-  }, [commands, consume, burst, drawEdgesTo, zoomTo, zoomBy, animateCamera, coolDown]);
+  }, [commands, consume, particles, lightning, camera, coolDown, reward]);
 
   /* ---------- render helpers ---------- */
   const edgeClass = (e: GraphEdge): string => {
@@ -274,7 +426,7 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
     const b = NODE_BY_ID[e.t]!;
     const cls = ["edge", e.k];
     if (e.heavy) cls.push("heavy");
-    if (e.k === "hl" && !warm) cls.push("cold");
+    if (e.k === "hl") cls.push(path);
     if (isFogged(a) || isFogged(b)) cls.push("fog");
     if (highlightId && !(e.s === highlightId || e.t === highlightId)) cls.push("dim");
     return cls.join(" ");
@@ -291,6 +443,8 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
       role="img"
       aria-label="Skill map"
       data-testid="skill-map"
+      data-path={path}
+      data-reduced-motion={reduced ? "true" : undefined}
       onClick={onBackgroundClick}
     >
       <defs>
@@ -305,8 +459,40 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
         >
           <path d="M0 0L10 5L0 10z" />
         </marker>
+        <radialGradient id="lantern">
+          <stop offset="0%" stopColor={COLORS.orange} stopOpacity={0.16} />
+          <stop offset="45%" stopColor={COLORS.orange} stopOpacity={0.05} />
+          <stop offset="100%" stopColor={COLORS.orange} stopOpacity={0} />
+        </radialGradient>
+        <filter id="bloom" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="4" result="b" />
+          <feMerge>
+            <feMergeNode in="b" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <filter id="halo" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation="5" />
+        </filter>
       </defs>
-      <g ref={zoomRef}>
+
+      {/* far layer: starfield (parallax 0.2×) */}
+      <g ref={starsRef} className="stars" aria-hidden>
+        {STARS.map((s, i) => (
+          <circle key={i} cx={s.x} cy={s.y} r={s.r} opacity={s.o} />
+        ))}
+      </g>
+
+      <g ref={zoomRef} className="world">
+        <circle
+          ref={lanternRef}
+          className="lantern"
+          cx={ROOT.x}
+          cy={ROOT.y}
+          r={LANTERN_R}
+          fill="url(#lantern)"
+          data-testid="lantern"
+        />
         <g ref={edgesRef} className={entering ? "edges-enter" : undefined}>
           {edgePaths.map(({ e, d }, i) => (
             <path
@@ -322,12 +508,12 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
           ))}
           <path
             d={rootLoopPath(ROOT)}
-            className={`edge hl${warm ? "" : " cold"}`}
+            className={`edge hl ${path}`}
             pathLength={1}
             data-edge-to="azair"
           />
         </g>
-        <g style={{ display: warm ? undefined : "none" }}>
+        <g style={{ display: lit ? undefined : "none" }}>
           {edgePaths
             .filter(({ e }) => e.k === "hl")
             .map(({ e, d }, i) => (
@@ -360,7 +546,7 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
                     ? "−"
                     : "+"
                   : (n.sign ?? "");
-            const lp = n.type !== "hub" ? labelPlacement(n) : null;
+            const lp = n.type !== "hub" ? labelPlacement({ ...n, r: n.r + grow }) : null;
             const cls = [
               "node",
               kind,
@@ -429,11 +615,13 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
                     r={n.r + grow}
                     className="body"
                     fill={n.type === "n" ? n.color : undefined}
+                    filter={st === "mastered" ? "url(#bloom)" : undefined}
                   />
                   {sign && <text className={`sign${n.big ? " big" : ""}`}>{sign}</text>}
                   {lp ? (
                     <text
-                      className="lbl"
+                      key={mode}
+                      className="lbl anim-fade"
                       x={lp.dx}
                       y={lp.dy}
                       textAnchor={lp.anchor}
@@ -444,7 +632,7 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
                   ) : (
                     n.fw &&
                     mode === "fw" && (
-                      <text className="cluster-lbl" y={-n.r - 8} textAnchor="middle">
+                      <text className="cluster-lbl anim-fade" y={-n.r - 8} textAnchor="middle">
                         {n.fw}
                       </text>
                     )
@@ -455,9 +643,14 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
                     {childPositions(n).map((p, i) => (
                       <g
                         key={i}
-                        className="child anim-pop"
-                        transform={`translate(${p.x},${p.y})`}
-                        style={{ animationDelay: `${i * 60}ms` }}
+                        className="child orbit-in"
+                        style={
+                          {
+                            "--tx": `${p.x}px`,
+                            "--ty": `${p.y}px`,
+                            animationDelay: `${i * 60}ms`,
+                          } as React.CSSProperties
+                        }
                       >
                         <line
                           x1={-p.x}
@@ -466,6 +659,8 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
                           y2={0}
                           stroke="#3a4a63"
                           strokeDasharray="2 3"
+                          pathLength={1}
+                          className="child-link"
                         />
                         <circle
                           r={6}
@@ -483,7 +678,7 @@ export default function SkillMap({ onNodeClick, onBackgroundClick }: SkillMapPro
             );
           })}
         </g>
-        <g ref={fxRef} />
+        <g ref={fxRef} className="fx" />
       </g>
     </svg>
   );
